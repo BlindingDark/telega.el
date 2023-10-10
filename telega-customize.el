@@ -476,6 +476,15 @@ See `telega-avatar--create-image' for more info."
   :type 'alist
   :group 'telega)
 
+(defcustom telega-avatar-slice-2-raise 0.5
+  "Raise of the second slice of the avatar.
+Setting this value to a higher number will avoid gaps between avatar,
+but increase the distance between username and text body."
+  :package-version '(telega . "0.8.163")
+  :type '(choice 'center integer)
+  :type 'integer
+  :group 'telega)
+
 (defcustom telega-avatar-text-compose-chars nil
   "Non-nil to compose sender initials with `telega-symbol-circle'.
 Use this to make textual avatars look prettier."
