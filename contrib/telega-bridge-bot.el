@@ -473,7 +473,7 @@ Will update CHAT-ID MSG-ID when download completed."
               (body (cadr name-and-body))) ; skip if no body
     (let ((sender-id (telega-bridge-bot--update-user-info msg-id chat-id bot-id name)))
       ;; replace sender
-      (plist-put forward-info :origin (list :@type "messageForwardOriginUser" :sender_user_id sender-id))
+      (plist-put forward-info :origin (list :@type "messageOriginUser" :sender_user_id sender-id))
       ;; remove duplicated username in body
       (plist-put
        content :text
@@ -515,7 +515,7 @@ ARGS is the arguments passed the the FUN."
 
 
 (advice-add 'telega-ins--aux-msg-one-line :around #'telega-ins--aux-msg-one-line!)
-(advice-add 'telega-msg--pp :before #'telega-bridge-bot--update-msg)
+(advice-add 'telega-chatbuf-msg--pp :before #'telega-bridge-bot--update-msg)
 (advice-add 'telega-msg--replied-message-fetch-callback :before
             (lambda (_msg replied-msg)
               (telega-bridge-bot--update-msg replied-msg)))

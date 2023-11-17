@@ -144,7 +144,7 @@ See `telega-filter--ewoc-spec' for CUSTOM-SPEC description."
          (umstring
           (telega-ins--as-string
            (telega-ins--with-attrs (list :max 7
-                                         :align-symbol "\u00a0"
+                                         :align-symbol telega-symbol-nbsp
                                          :elide t
                                          :align 'right)
              (unless (zerop unread)
@@ -170,8 +170,7 @@ See `telega-filter--ewoc-spec' for CUSTOM-SPEC description."
         (telega-ins "[")
         (telega-ins--with-attrs (list :min title-width
                                       :max title-width
-                                      ;; non-break space
-                                      :align-symbol "\u00a0"
+                                      :align-symbol telega-symbol-nbsp
                                       :elide t
                                       :align 'left)
           (telega-ins (number-to-string nchats) ":")
@@ -179,7 +178,7 @@ See `telega-filter--ewoc-spec' for CUSTOM-SPEC description."
               (telega-ins--with-face 'bold
                 (telega-ins name))
             (telega-ins name)))
-        (telega-ins "\u00a0")
+        (telega-ins telega-symbol-nbsp)
         (telega-ins umstring)
         (telega-ins "]")))))
 
@@ -808,6 +807,12 @@ supergroups and channels and receives CHANNELS_TOO_MUCH error."
   (interactive)
   (setq telega--search-chats (telega--getInactiveSupergroupChats))
   (telega-filter-add 'inactive-supergroups))
+
+(defun telega-filter-by-can-send-stories ()
+  "Filter chats you can post stories to."
+  (interactive)
+  (setq telega--search-chats (telega--getChatsToSendStories))
+  (telega-filter-add 'can-send-stories))
 
 (defun telega-filter-by-has-video-chat (including-empty-p)
   "Filter chats with started video chat.

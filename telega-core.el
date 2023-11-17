@@ -45,7 +45,7 @@
 
 (defconst telega-spoiler-translation-table
   (let ((table (make-char-table 'translation-table)))
-    (set-char-table-range table t ?\X)
+    (set-char-table-range table t ?\█)
     (aset table ?\s ?\s)
     (aset table ?\n ?\n)
     table)
@@ -102,7 +102,16 @@
     (:can_manage_topics . "lng_rights_group_topics")
     (:can_promote_members . "telega_rights_promote_members")
     (:can_manage_video_chats . "lng_rights_group_manage_calls")
+
+    (:can_post_stories . "lng_rights_channel_post_stories")
+    (:can_edit_stories . "lng_rights_channel_edit_stories")
+    (:can_delete_stories . "lng_rights_channel_delete_stories")
+
     (:is_anonymous . "lng_rights_group_anonymous")))
+
+(defconst telega-chat--admin-permissions-for-channels
+  '(:can_post_messages :can_edit_messages :can_post_stories :can_edit_stories
+                       :can_delete_stories))
 
 (defconst telega-notification-scope-types
   '((private . "notificationSettingsScopePrivateChats")
@@ -115,6 +124,12 @@
     ("USD" . "$")
     ("RUB" . "₽"))
   "Alist of currency symbols.")
+
+(defvar telega--column-offset 0
+  "Additional offset for the `telega-currency-column'.")
+
+(defconst telega-symbol-nbsp "\u00a0"
+  "Non-breakable space.")
 
 (defconst telega-emoji-animated-fullscreen-list
   '("🎆" "🎉" "🎈" "👍" "💩" "❤" "👻" "👎" "🤮" "😂" "💸" "🎃" "🍆")
@@ -167,11 +182,6 @@ Updated on `updateDefaultReactionType' event.")
   "Language codes used for translations.")
 
 ;;; Runtime variables
-(defvar telega--current-buffer nil
-  "Buffer currently inserting into.
-Bind this to make `telega-chars-xxx' family functions to work correctly.
-Becase `telega-ins--as-string' uses temporary buffer.")
-
 (defvar telega-msg-contains-unread-mention nil
   "Bind this variable when displaying message containing unread mention.")
 
@@ -220,6 +230,10 @@ Such as pinned, replies, etc.")
   "Hash table ((chat-id . story-id) -> story) of cached stories.")
 (defvar telega--actions nil
   "Hash table ((chat-id . msg-thread-id) -> alist-of-user-actions).")
+(defun telega-chat--actions (chat &optional msg-thread-id)
+  "Return actions for the CHAT and optional MSG-THREAD-ID."
+  (gethash (cons (plist-get chat :id) (or msg-thread-id 0)) telega--actions))
+
 (defvar telega--ordered-chats nil "Ordered list of all chats.")
 (defvar telega--filtered-chats nil
   "Chats filtered by currently active filters.
@@ -419,6 +433,14 @@ display the list.")
 (defvar telega-topic--default-icons nil
   "Cached list of topic icons which can be used by all users.")
 
+(defvar telega--default-face 'default
+  "Bind this to alter size calculation for the images.")
+
+(defvar telega--accent-colors-alist nil
+  "Alist id -> accent-color received by `updateAccentColors' event.")
+(defvar telega--accent-colors-available-ids nil
+  "Accent colors received by `updateAccentColors' event.")
+
 
 ;;; Shared chat buffer local variables
 (defvar telega-chatbuf--chat nil
@@ -450,12 +472,11 @@ Actual value is `:@extra` value of the call to inline bot.")
 Asynchronously loaded when chatbuf is created.")
 (make-variable-buffer-local 'telega-chatbuf--administrators)
 
-(defvar telega-chatbuf--active-stories-hidden nil
-  "Non-nil if active stories should not be displayed in the footer.")
-(make-variable-buffer-local 'telega-chatbuf--active-stories-hidden)
-(defvar telega-chatbuf--video-chat-hidden nil
-  "Non-nil if non-empty video chat is displayed in modeline instead of footer.")
-(make-variable-buffer-local 'telega-chatbuf--video-chat-hidden)
+(defvar telega-chatbuf--hidden-headers
+  '(:active-stories nil :pinned-stories nil :video-chat nil)
+  "Plist to check whether some header is hidden by pressing [x] button.")
+(make-variable-buffer-local 'telega-chatbuf--hidden-headers)
+
 (defvar telega-chatbuf--group-call-users nil
   "List of group call participants.")
 (make-variable-buffer-local 'telega-chatbuf--group-call-users)
@@ -486,6 +507,38 @@ Could be used for fetching `admins', `pinned-messages', `reply-markup', etc.")
 Could contain `:loading', `:older-loaded', `:newer-freezed' or
 `:newer-loaded' elements.")
 (make-variable-buffer-local 'telega-chatbuf--history-state-plist)
+
+(defvar telega-chatbuf--thread nil
+  "Thread currently active in the chatbuf.
+Thread is either TL `forumTopic' or `message' starting a thread.")
+(make-variable-buffer-local 'telega-chatbuf--thread)
+
+(defun telega-chatbuf--thread-msg ()
+  "Return chatbuf's thread as thread's root message."
+  (when (telega-msg-p telega-chatbuf--thread)
+    telega-chatbuf--thread))
+
+(defun telega-chatbuf--thread-info ()
+  (plist-get (telega-chatbuf--thread-msg) :telega-thread-info))
+
+(defun telega-chatbuf--thread-topic ()
+  "Return chatbuf's thread as topic."
+  (unless (telega-chatbuf--thread-msg)
+    ;; Must be topic or nil at this point
+    telega-chatbuf--thread))
+
+(defun telega-chatbuf--message-thread-id ()
+  "Return message thread id for the chatbuf.
+To be used in various TDLib methods as `:message_thread_id` argument."
+  (or (when-let ((topic (telega-chatbuf--thread-topic)))
+        (telega-topic-msg-thread-id topic))
+      (when-let ((thread (telega-chatbuf--thread-msg)))
+        (plist-get telega-chatbuf--thread :message_thread_id))
+      0))
+
+(defvar telega-chatbuf--aux-plist nil
+  "Supplimentary plist for aux prompt.")
+(make-variable-buffer-local 'telega-chatbuf--aux-plist)
 
 
 (defun telega--init-vars ()
@@ -580,6 +633,9 @@ Done when telega server is ready to receive queries."
 
   (setq telega--notification-messages-ring
         (make-ring telega-notifications-history-ring-size))
+
+  (setq telega--accent-colors-alist nil
+        telega--accent-colors-available-ids nil)
   )
 
 (defun telega-test-env (&optional quiet-p)
@@ -1019,6 +1075,12 @@ MSG-SENDER could be a user or a chat."
   (let ((telega-temex-match-prefix 'topic))
     (telega-match-p topic temex)))
 
+(defun telega-story-match-p (story temex)
+  "Return non-nil if STORY matches TEMEX."
+  (declare (indent 1))
+  (let ((telega-temex-match-prefix 'story))
+    (telega-match-p story temex)))
+
 (defun telega-match-gen-predicate (prefix temex)
   "Return predicate function to match TDLib object against TEMEX.
 PREFIX is one of: `msg', `chat', `user' or `sender'."
@@ -1395,7 +1457,6 @@ If NO-PROPS is non-nil, then remove properties from the resulting string."
           ((string= "chatListArchive" pos-list-type)
            'archive))))
 
-
 (defsubst telega-chat-position (chat)
   "Return CHAT position in current `telega-tdlib--chat-list'."
   (cl-find telega-tdlib--chat-list (plist-get chat :positions)
@@ -1538,16 +1599,46 @@ Return t."
 
 (defmacro telega-ins--as-string (&rest body)
   "Execute BODY inserters and return result as a string."
-  (let ((fra-sym (gensym "frasym")))
-    ;; NOTE: Keep value for buffer local default face while using
-    ;; temporary buffer, so `telega-chars-xwidth/xheight' will
-    ;; continue returning correct values
-    `(let ((,fra-sym face-remapping-alist))
-       (with-temp-buffer
-         (when ,fra-sym
-           (setq-local face-remapping-alist ,fra-sym))
-         ,@body
-         (buffer-string)))))
+  ;; NOTE: Use current buffer as insert placeholder, so all buffer
+  ;; local variables are kept.  If multibyte characters are disabled
+  ;; in the buffer (e.g. image-mode) then create temp buffer with all
+  ;; local vars having same values as in original buffer
+  ;;
+  ;; Note: Do not use `narrow-to-region'/`widen' because buffer can be
+  ;; narrowed only once, but `telega-ins--as-string' might be called
+  ;; in recursive manner
+  (let ((point-sym (gensym "point"))
+        (v-sym (gensym "vsym"))
+        (lvars-sym (gensym "lvars")))
+    `(if enable-multibyte-characters
+         ;; Fast version.  ARGUABLE. this version degradates on large
+         ;; buffers
+         (let ((,point-sym (point)))
+           (with-telega-buffer-modify
+            (unwind-protect
+                (progn
+                  ;; Always start at the beginning of the line
+                  (insert "\n")
+                  ,@body
+                  (buffer-substring (1+ ,point-sym) (point)))
+              (delete-region ,point-sym (point)))))
+
+       ;; Fallback to slow versing using temp buffer with local vars
+       ;; kept
+       (let ((,lvars-sym (buffer-local-variables)))
+         (with-temp-buffer
+           (dolist (,v-sym ,lvars-sym)
+             (condition-case ()
+                 (if (symbolp ,v-sym)
+                     (makunbound (make-local-variable ,v-sym))
+                   (set (make-local-variable (car ,v-sym)) (cdr ,v-sym)))
+               ;; E.g. for enable-multibyte-characters.
+               (setting-constant nil)))
+
+           (set-buffer-multibyte t)
+           (with-telega-buffer-modify
+            ,@body)
+           (buffer-string))))))
 
 (defmacro telega-ins--one-lined (&rest body)
   "Execute BODY making insertation one-lined.
@@ -1636,6 +1727,48 @@ Return what BODY returns."
            (progn ,@body)
          (add-text-properties ,spnt-sym (point) ,props)))))
 
+(defun telega--region-by-text-prop (beg prop &optional limit)
+  "Return region after BEG point with text property PROP set."
+  (unless (get-text-property beg prop)
+    (setq beg (next-single-char-property-change beg prop nil limit)))
+  (let ((end (next-single-char-property-change beg prop nil limit)))
+    (when (> end beg)
+      (cons beg end))))
+
+(defmacro telega-ins--line-wrap-prefix (prefix &rest body)
+  "Execute BODY adding `line-prefix' and `wrap-prefix' properties.
+`line-prefix' and `wrap-prefix' are contatenated on subsequent calls to
+`telega-ins--line-wrap-prefix'."
+  (declare (indent 1))
+  (let ((lwprefix-sym (gensym "lwprefix"))
+        (lwprefix-props-sym (gensym "lwprefix-props"))
+        (start-sym (gensym "start"))
+        (region-sym (gensym "region")))
+    `(let* ((,start-sym (point))
+            (,lwprefix-sym ,prefix)
+            (,lwprefix-props-sym (list :telega-lwprefix ,lwprefix-sym
+                                       'line-prefix ,lwprefix-sym
+                                       'wrap-prefix ,lwprefix-sym))
+            (telega--column-offset (+ telega--column-offset
+                                      (string-width ,lwprefix-sym)))
+            ,region-sym)
+       (prog1
+           (progn ,@body)
+         (while (setq ,region-sym (telega--region-by-text-prop
+                                   ,start-sym 'line-prefix (point)))
+           (add-text-properties ,start-sym (car ,region-sym)
+                                ,lwprefix-props-sym)
+           (add-text-properties
+            (car ,region-sym) (cdr ,region-sym)
+            (list 'line-prefix (concat ,lwprefix-sym
+                                       (get-text-property (car ,region-sym)
+                                                          'line-prefix))
+                  'wrap-prefix (concat ,lwprefix-sym
+                                       (get-text-property (car ,region-sym)
+                                                          'wrap-prefix))))
+           (setq ,start-sym (cdr ,region-sym)))
+         (add-text-properties ,start-sym (point) ,lwprefix-props-sym)))))
+
 (defmacro telega-ins-prefix (prefix &rest body)
   "In case BODY inserted anything then PREFIX is also inserted before BODY."
   (declare (indent 1))
@@ -1647,20 +1780,31 @@ Return what BODY returns."
            (telega-ins ,prefix))
          t))))
 
-(defun telega-ins--move-to-column (column &optional space-char)
+(defun telega-ins--move-to-column (column)
   "Insert space aligned to COLUMN.
 Uses `:align-to' display property."
-  ;; NOTE: Use Pixel Specification for `:align-to' this will take into
-  ;; account `text-scale-mode' into account.
+  ;; NOTE: Use Pixel Specification for `:align-to' this will take
+  ;; `text-scale-mode' into account.
   ;; However, if displaying in the terminal, then use ordinary columns.
   ;; See https://t.me/emacs_telega/32464
-  (let ((nwidth (- column (telega-current-column)))
-        (align-to (if (display-graphic-p)
+  (let ((align-to (if (display-graphic-p)
                       (list (telega-chars-xwidth column))
                     column)))
     (telega-ins--with-props `(display (space :align-to ,align-to))
-      (telega-ins (make-string (if (> nwidth 0) nwidth 1)
-                               (or space-char ?\s))))))
+      (telega-ins " "))))
+
+(defmacro telega-ins--sequence (var-seq sep-ins &rest body-ins)
+  "Insert items from sequence using BODY-INS separating them with SEP-INS.
+VAR-SEQ is used directly in the `seq-doseq' form."
+  (declare (indent 1))
+  (let ((need-sep-sym (gensym "need-sep")))
+    `(let ((,need-sep-sym nil))
+       (seq-doseq ,var-seq
+         (when ,need-sep-sym
+           ,sep-ins)
+         (when (progn ,@body-ins)
+           (setq ,need-sep-sym t)))
+       ,need-sep-sym)))
 
 (provide 'telega-core)
 

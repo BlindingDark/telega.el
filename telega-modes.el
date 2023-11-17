@@ -62,7 +62,7 @@
     (:eval (telega-mode-line-unread-unmuted))
     (:eval (telega-mode-line-mentions 'messages)))
   "Format in mode-line-format for `telega-mode-line-string'."
-  :type 'list
+  :type 'sexp
   :group 'telega-modes)
 
 (defvar telega-mode-line-string ""
@@ -80,13 +80,13 @@
 (defun telega-mode-line-logo-image ()
   "Return telega logo image to be used in modeline."
   (let* ((box-line-width-raw
-          (plist-get (face-attribute 'mode-line :box) :line-width))
+          (plist-get (face-attribute telega--default-face :box) :line-width))
          (box-line-width
           (if (consp box-line-width-raw)
               (car box-line-width-raw)
             (or box-line-width-raw 0)))
          (mode-line-height
-          (+ (telega-chars-xheight 1 'mode-line)
+          (+ (telega-chars-xheight 1)
              ;; NOTE: height adjustment only needed if box-line-width
              ;; is negative. See https://t.me/emacs_telega/26677
              (if (< box-line-width 0)
@@ -195,7 +195,7 @@ If MESSAGES-P is non-nil then use number of messages with mentions."
   (when telega-mode-line-mode
     (setq telega-mode-line-string
           (when (telega-server-live-p)
-            (format-mode-line telega-mode-line-string-format)))
+            (telega-format-mode-line telega-mode-line-string-format)))
     (force-mode-line-update 'all)))
 
 ;;;###autoload
@@ -287,7 +287,7 @@ labels are not supported by XEMBED based system trays, such as
 Alist with `offline', `online' or `connecting' as key, and value in form
 (CIRCLE-COLOR TRIANGLE-COLOR ONLINE-CIRCLE-COLOR)."
   :package-version '(telega . "0.7.34")
-  :type 'list
+  :type '(alist :key-type symbol :value-type (repeat string))
   :group 'telega-modes)
 
 (defcustom telega-appindicator-show-account-name t
@@ -311,7 +311,7 @@ Applied only if `telega-appindicator-use-label' is non-nil."
 Use this labels instead of plain number.
 Set to nil to use plain number."
   :package-version '(telega . "0.7.2")
-  :type 'list
+  :type '(repeat string)
   :group 'telega-modes)
 
 (defvar telega-appindicator--cached-icons nil
@@ -491,7 +491,7 @@ Return filename of the generated icon."
 (defcustom telega-autoplay-msg-temex
   '(type Animation Sticker AnimatedEmoji)
   "Message Temex for messages to automatically play content for."
-  :type 'list
+  :type 'telega-msg-temex
   :options '((and (not outgoing)
                   (or (type Animation Sticker AnimatedEmoji)
                       (web-page :animation)
@@ -500,7 +500,8 @@ Return filename of the generated icon."
 
 (defcustom telega-autoplay-custom-emojis 10
   "Non-nil to automatically play this number of custom emojis in the message."
-  :type '(or nil integer)
+  :type '(choice (const :tag "Autoplay Disabled" nil)
+                 integer)
   :group 'telega-modes)
 
 (defun telega-autoplay-custom-emojis (msg &optional force)
@@ -618,7 +619,7 @@ Cancel downloading of the corresporting file."
   "*Chat Temex for `global-telega-squash-message-mode'.
 Global squash message mode enables message squashing only in
 chats matching this chat temex."
-  :type 'list
+  :type 'telega-chat-temex
   :group 'telega-modes)
 
 (defcustom telega-squash-message-within-seconds 60
@@ -734,7 +735,7 @@ squashing is not applied."
     " "
     (:eval (telega-image-mode-mode-line-chat-position)))
   "Format for the modeline."
-  :type 'list
+  :type 'sexp
   :group 'telega-modes)
 
 (defvar telega-image--message nil
@@ -760,8 +761,7 @@ To be displayed in the modeline.")
 (defun telega-image-mode--update-modeline ()
   (setq mode-line-buffer-identification
         (list (propertized-buffer-identification "%b")
-              (format-mode-line telega-image-mode-mode-line-format nil nil
-                                (current-buffer))))
+              (telega-format-mode-line telega-image-mode-mode-line-format)))
   (force-mode-line-update))
 
 (defun telega-image-mode--chat-position-fetch ()
@@ -863,9 +863,12 @@ Could be used as condition function in `display-buffer-alist'."
     (let ((chat (telega-msg-chat telega-image--message))
           (img-msg telega-image--message)
           (img-buffer (current-buffer)))
-      (telega--searchChatMessages chat '(:@type "searchMessagesFilterPhoto") ""
-                                  (plist-get telega-image--message :id)
-                                  (if backward 0 -2) 3 nil
+      (telega--searchChatMessages chat
+          '(:@type "searchMessagesFilterPhoto")
+          (plist-get telega-image--message :id)
+          (if backward 0 -2)
+        :limit 3
+        :callback
         (lambda (reply)
           (let ((found-messages (append (plist-get reply :messages) nil)))
             (if (or (telega--tl-error-p reply)
@@ -1166,6 +1169,7 @@ UFILE specifies Telegram file being uploading."
     (676179719  :source opencollective :since_date 1634203432)
     (52573016   :source opencollective :since_date 1643882221)
     (5974516348 :source private        :since_date 1695584567)
+    (86646581   :source private        :since_date 1700213789)
     )
   "Alist of telega patrons.")
 
@@ -1182,7 +1186,7 @@ Return patron info, or nil if SENDER is not a telega patron."
                (lambda (svg circle)
                  (when addon-fun
                    (funcall addon-fun svg circle))
-                 (let* ((svg-w (dom-attr svg 'width))
+                 (let* ((svg-w (telega-svg-width svg))
                         (cx (nth 0 circle))
                         (cy (nth 1 circle))
                         (cr (nth 2 circle))
@@ -1420,7 +1424,7 @@ EVENT must be \"updateDeleteMessages\"."
       (telega-ins--msg-sender user))
     (when (or (telega-me-p user)
               (not (telega-chat-private-p chat)))
-      (telega-ins "→")
+      (telega-ins (telega-symbol 'right-arrow))
       (when telega-active-locations-show-avatars
         (telega-ins--image
          (telega-msg-sender-avatar-image-one-line chat)))
@@ -1433,9 +1437,9 @@ EVENT must be \"updateDeleteMessages\"."
     (cl-destructuring-bind (live-for updated-ago)
         (telega-msg-location-live-for msg)
       (telega-ins-fmt " for %s"
-        (telega-duration-human-readable live-for 1))
+        (telega-duration-human-readable live-for 1 'long))
       (telega-ins-fmt " (%s ago)"
-        (telega-duration-human-readable updated-ago 1)))
+        (telega-duration-human-readable updated-ago 1 'long)))
 
     (when (and (not (telega-me-p user)) telega-my-location)
       (telega-ins " " (telega-symbol 'distance))
@@ -1533,14 +1537,14 @@ messages."
 (defcustom telega-active-video-chats-temex
   '(and is-known (has-video-chat non-empty))
   "Chat Temex to match chat with active video chat."
-  :type 'list
+  :type 'telega-chat-temex
   :group 'telega-modes)
 
 (defcustom telega-active-video-chats-mode-line-format
   '(:eval (telega-mode-line-active-video-chats))
   "Modeline format for active video chats for `telega-mode-line-mode'.
 Set to nil to disable active video chats in the modeline."
-  :type 'list
+  :type 'sexp
   :group 'telega-modes)
 
 (defvar telega-active-video-chats--chats nil
@@ -1571,7 +1575,7 @@ Set to nil to disable active video chats in the modeline."
           ((null has-participants-p)
            (telega-ins (telega-symbol 'video-chat-passive))))
     (telega-ins " ")
-    (telega-ins "→")
+    (telega-ins (telega-symbol 'right-arrow))
     (telega-ins " ")
     (telega-ins--msg-sender chat
       :with-avatar-p t
@@ -1679,7 +1683,7 @@ Speech recognition is only applied to voice messages matching this
 Message Temex.  Applied only if non-nil.
 For example, to recognize speech in a voice messages only in private
 chats, use `(chat (type private))' Message Temex."
-  :type 'list
+  :type 'telega-msg-temex
   :group 'telega-modes)
 
 (defun telega-recognize-voice--on-msg-hover-in (msg)
@@ -1728,7 +1732,7 @@ Recognize only if message is observable."
 (defcustom telega-auto-translate-probe-language-codes nil
   "List of language codes to probe.
 Chat description is used to probe chat's language."
-  :type 'list
+  :type '(repeat (string :tag "Language Code"))
   :group 'telega-modes)
 
 (defun telega-auto-translate--chatbuf-translate-visible-messages ()
@@ -1854,6 +1858,21 @@ Or nil if translation is not needed."
   "Message's content has been updated, rerun translation."
   (plist-put msg :telega-translated nil)
   (telega-auto-translate--on-msg-insert msg))
+
+(defun telega-auto-translate--chatbuf-prompt-translation ()
+  "Addon to chatbuf prompt in case `telega-auto-translate-mode' is enabled."
+  (when (and telega-auto-translate-mode
+             telega-chatbuf-language-code
+             telega-translate-to-language-by-default
+             (not (equal telega-chatbuf-language-code
+                         telega-translate-to-language-by-default)))
+    (telega-ins--as-string
+     (telega-ins--with-face 'telega-shadow
+       (telega-ins "["
+                   telega-translate-to-language-by-default
+                   (telega-symbol 'right-arrow)
+                   telega-chatbuf-language-code
+                   "]")))))
 
 (defvar telega-auto-translate-mode-lighter
   (concat " " (telega-symbol 'mode) "Translate")
